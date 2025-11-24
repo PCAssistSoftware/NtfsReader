@@ -76,17 +76,19 @@ namespace System.IO.Filesystem.Ntfs
         [StructLayout(LayoutKind.Sequential)]
         private struct NativeOverlapped
         {
-            public IntPtr privateLow;
-            public IntPtr privateHigh;
-            public UInt64 Offset;
+            public IntPtr InternalLow;
+            public IntPtr InternalHigh;
+            public uint OffsetLow;
+            public uint OffsetHigh;
             public IntPtr EventHandle;
 
             public NativeOverlapped(UInt64 offset)
             {
-                Offset = offset;
+                OffsetLow = (uint)(offset & 0xFFFFFFFF);
+                OffsetHigh = (uint)(offset >> 32);
                 EventHandle = IntPtr.Zero;
-                privateLow = IntPtr.Zero;
-                privateHigh = IntPtr.Zero;
+                InternalLow = IntPtr.Zero;
+                InternalHigh = IntPtr.Zero;
             }
         }
     }
