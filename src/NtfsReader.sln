@@ -7,8 +7,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NtfsReader", "NtfsReader\Nt
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NtfsReaderTests", "..\tests\NtfsReaderTests\NtfsReaderTests.csproj", "{66D683FF-B7BE-4335-889D-CBEBC5ED8517}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "debug", "debug\debug.csproj", "{749EE767-D238-4F3F-88DC-1CD80F592BA1}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
