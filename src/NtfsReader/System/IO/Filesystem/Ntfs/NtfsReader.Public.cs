@@ -130,7 +130,9 @@ namespace System.IO.Filesystem.Ntfs
 
 		public byte[] GetVolumeBitmap()
 		{
-			return null;
+			// Bitmap data is no longer used as we process all MFT records directly.
+    		// This method is retained for API compatibility but always returns null.
+    		return null;
 		}
 
 		#region IDisposable Members
