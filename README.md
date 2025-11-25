@@ -1,7 +1,9 @@
 # NtfsReader
-Modifications:
-- source on Github instead of sourceforge
-- netstandard2.0 targetting project file added to allow library to be consumed from .NET Core
+Modifications made in this fork:
+
+- targeting netstandard2.0 instead of netstandard2.1 so can use with .NET 4.8
+- fixed LastAccessTime and FileChangeTime being swapped - from https://github.com/michaelkc/NtfsReader/pull/3/files
+- fixed unable to read volume information issue which occurred on large 3TB drive and threw exception when calling ntfsReader.GetNodes - as per PR#1
 
 Original description from https://sourceforge.net/projects/ntfsreader/ :
 
