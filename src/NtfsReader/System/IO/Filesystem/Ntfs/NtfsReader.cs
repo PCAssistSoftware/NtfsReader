@@ -569,8 +569,6 @@ namespace System.IO.Filesystem.Ntfs
 		private const UInt64 VIRTUALFRAGMENT = 18446744073709551615; // _UI64_MAX - 1 */
 		private const UInt32 ROOTDIRECTORY = 5;
 
-		private readonly byte[] BitmapMasks = new byte[] { 1, 2, 4, 8, 16, 32, 64, 128 };
-
 		#endregion
 
 		SafeFileHandle _volumeHandle;
@@ -1403,7 +1401,7 @@ namespace System.IO.Filesystem.Ntfs
 						if (streams != null)
 							_streams[nodeIndex] = streams.ToArray();
 					}
-					catch
+					catch (Exception)
 					{
 						// Skip invalid/unused MFT records
 						continue;
