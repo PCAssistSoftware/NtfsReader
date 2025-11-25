@@ -63,7 +63,7 @@ namespace System.IO.Filesystem.Ntfs
                 node = parent;
             }
 
-            StringBuilder fullPath = new StringBuilder(_driveNameTrimmed);
+            StringBuilder fullPath = new StringBuilder(_driveInfo.Name.TrimEnd('\\'));
 
             while (fullPathNodes.Count > 0)
             {

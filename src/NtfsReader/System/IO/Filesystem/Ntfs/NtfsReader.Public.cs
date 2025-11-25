@@ -58,8 +58,6 @@ namespace System.IO.Filesystem.Ntfs
 			_driveInfo = driveInfo;
 			_retrieveMode = retrieveMode;
 
-			_driveNameTrimmed = _driveInfo.Name.TrimEnd(new char[] { '\\' });
-
 			StringBuilder builder = new StringBuilder(1024);
 			GetVolumeNameForVolumeMountPoint(_driveInfo.RootDirectory.Name, builder, builder.Capacity);
 
@@ -132,7 +130,9 @@ namespace System.IO.Filesystem.Ntfs
 
 		public byte[] GetVolumeBitmap()
 		{
-			return _bitmapData;
+			// Bitmap data is no longer used as we process all MFT records directly.
+    		// This method is retained for API compatibility but always returns null.
+    		return null;
 		}
 
 		#region IDisposable Members
