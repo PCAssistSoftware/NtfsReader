@@ -441,12 +441,12 @@ namespace System.IO.Filesystem.Ntfs
 					if (_reader._streams == null)
 						throw new NotSupportedException("The streams haven't been retrieved. Make sure to use the proper RetrieveMode.");
 
-					List<Stream> streams = _reader._streams[_nodeIndex];
+					Stream[] streams = _reader._streams[_nodeIndex];
 					if (streams == null)
 						return null;
 
 					List<IStream> newStreams = new List<IStream>();
-					for (int i = 0; i < streams.Count; ++i)
+					for (int i = 0; i < streams.Length; ++i)
 						newStreams.Add(new StreamWrapper(_reader, this, i));
 
 					return newStreams;
@@ -577,12 +577,10 @@ namespace System.IO.Filesystem.Ntfs
 		DiskInfoWrapper _diskInfo;
 		Node[] _nodes;
 		StandardInformation[] _standardInformations;
-		List<Stream>[] _streams;
+		Stream[][] _streams;
 		DriveInfo _driveInfo;
-		string _driveNameTrimmed;
 		List<string> _names = new List<string>();
 		RetrieveMode _retrieveMode;
-		byte[] _bitmapData;
 
 		//preallocate a lot of space for the strings to avoid too much dictionary resizing
 		//use ordinal comparison to improve performance
@@ -634,23 +632,18 @@ namespace System.IO.Filesystem.Ntfs
 
 		private Stream SearchStream(List<Stream> streams, AttributeType streamType)
 		{
-			//since the number of stream is usually small, we can afford O(n)
-			/*foreach (Stream stream in streams)
+			foreach (Stream stream in streams)
 				if (stream.Type == streamType)
-					return stream;*/
-
-			return streams.Find(s => s.Type == streamType);
+					return stream;
+			return null;
 		}
 
 		private Stream SearchStream(List<Stream> streams, AttributeType streamType, int streamNameIndex)
 		{
-			//since the number of stream is usually small, we can afford O(n)
-			/*foreach (Stream stream in streams)
-				if (stream.Type == streamType &&
-					stream.NameIndex == streamNameIndex)
-					return stream;*/
-
-			return streams.Find(s => (s.NameIndex == streamNameIndex) && (s.Type == streamType));
+			foreach (Stream stream in streams)
+				if (stream.Type == streamType && stream.NameIndex == streamNameIndex)
+					return stream;
+			return null;
 		}
 
 		#endregion
@@ -667,6 +660,16 @@ namespace System.IO.Filesystem.Ntfs
 
 			if (read != (uint)len)
 				throw new Exception("Unable to read volume information");
+		}
+
+		private unsafe void ReadFile(byte* buffer, int len, UInt64 absolutePosition)
+		{
+			ReadFile(buffer, (UInt64)len, absolutePosition);
+		}
+
+		private unsafe void ReadFile(byte* buffer, UInt32 len, UInt64 absolutePosition)
+		{
+			ReadFile(buffer, (UInt64)len, absolutePosition);
 		}
 
 		#endregion
@@ -743,7 +746,7 @@ namespace System.IO.Filesystem.Ntfs
 
 			fixed (byte* ptr = volumeData)
 			{
-				ReadFile(ptr, (UInt64)volumeData.Length, 0);
+				ReadFile(ptr, volumeData.Length, 0);
 
 				BootSector* bootSector = (BootSector*)ptr;
 
@@ -1298,53 +1301,6 @@ namespace System.IO.Filesystem.Ntfs
 		}
 
 		/// <summary>
-		/// Process the bitmap data that contains information on inode usage.
-		/// </summary>
-		private unsafe byte[] ProcessBitmapData(List<Stream> streams)
-		{
-			UInt64 Vcn = 0;
-			UInt64 MaxMftBitmapBytes = 0;
-
-			Stream bitmapStream = SearchStream(streams, AttributeType.AttributeBitmap);
-			if (bitmapStream == null)
-				throw new Exception("No Bitmap Data");
-
-			foreach (Fragment fragment in bitmapStream.Fragments)
-			{
-				if (fragment.Lcn != VIRTUALFRAGMENT)
-					MaxMftBitmapBytes += (fragment.NextVcn - Vcn) * _diskInfo.BytesPerSector * _diskInfo.SectorsPerCluster;
-
-				Vcn = fragment.NextVcn;
-			}
-
-			byte[] bitmapData = new byte[MaxMftBitmapBytes];
-
-			fixed (byte* bitmapDataPtr = bitmapData)
-			{
-				Vcn = 0;
-				UInt64 RealVcn = 0;
-
-				foreach (Fragment fragment in bitmapStream.Fragments)
-				{
-					if (fragment.Lcn != VIRTUALFRAGMENT)
-					{
-						ReadFile(
-							bitmapDataPtr + RealVcn * _diskInfo.BytesPerSector * _diskInfo.SectorsPerCluster,
-							(fragment.NextVcn - Vcn) * _diskInfo.BytesPerSector * _diskInfo.SectorsPerCluster,
-							fragment.Lcn * _diskInfo.BytesPerSector * _diskInfo.SectorsPerCluster
-							);
-
-						RealVcn = RealVcn + fragment.NextVcn - Vcn;
-					}
-
-					Vcn = fragment.NextVcn;
-				}
-			}
-
-			return bitmapData;
-		}
-
-		/// <summary>
 		/// Begin the process of interpreting MFT data
 		/// </summary>
 		private unsafe Node[] ProcessMft()
@@ -1372,17 +1328,10 @@ namespace System.IO.Filesystem.Ntfs
 				if (!ProcessMftRecord(buffer, _diskInfo.BytesPerMftRecord, 0, out mftNode, mftStreams, true))
 					throw new Exception("Can't interpret Mft Record");
 
-				//the bitmap data contains all used inodes on the disk
-				_bitmapData =
-					ProcessBitmapData(mftStreams);
-
-				OnBitmapDataAvailable();
-
 				Stream dataStream = SearchStream(mftStreams, AttributeType.AttributeData);
 
-				UInt32 maxInode = (UInt32)_bitmapData.Length * 8;
-				if (maxInode > (UInt32)(dataStream.Size / _diskInfo.BytesPerMftRecord))
-					maxInode = (UInt32)(dataStream.Size / _diskInfo.BytesPerMftRecord);
+				// Calculate maxInode directly from data stream size
+				var maxInode = (UInt32)(dataStream.Size / _diskInfo.BytesPerMftRecord);
 
 				Node[] nodes = new Node[maxInode];
 				nodes[0] = mftNode;
@@ -1395,7 +1344,7 @@ namespace System.IO.Filesystem.Ntfs
 				}
 
 				if ((_retrieveMode & RetrieveMode.Streams) == RetrieveMode.Streams)
-					_streams = new List<Stream>[maxInode];
+					_streams = new Stream[maxInode][];
 
 				/* Read and process all the records in the MFT. The records are read into a
 				   buffer and then given one by one to the InterpretMftRecord() subroutine. */
@@ -1411,10 +1360,6 @@ namespace System.IO.Filesystem.Ntfs
 				int fragmentCount = dataStream.Fragments.Count;
 				for (UInt32 nodeIndex = 1; nodeIndex < maxInode; nodeIndex++)
 				{
-					// Ignore the Inode if the bitmap says it's not in use.
-					if ((_bitmapData[nodeIndex >> 3] & BitmapMasks[nodeIndex % 8]) == 0)
-						continue;
-
 					if (nodeIndex >= BlockEnd)
 					{
 						if (!ReadNextChunk(
@@ -1432,29 +1377,37 @@ namespace System.IO.Filesystem.Ntfs
 						totalBytesRead += (BlockEnd - BlockStart) * _diskInfo.BytesPerMftRecord;
 					}
 
-					FixupRawMftdata(
-							buffer + (nodeIndex - BlockStart) * _diskInfo.BytesPerMftRecord,
-							_diskInfo.BytesPerMftRecord
-						);
+					try
+					{
+						FixupRawMftdata(
+								buffer + (nodeIndex - BlockStart) * _diskInfo.BytesPerMftRecord,
+								_diskInfo.BytesPerMftRecord
+							);
 
-					List<Stream> streams = null;
-					if ((_retrieveMode & RetrieveMode.Streams) == RetrieveMode.Streams)
-						streams = new List<Stream>();
+						List<Stream> streams = null;
+						if ((_retrieveMode & RetrieveMode.Streams) == RetrieveMode.Streams)
+							streams = new List<Stream>();
 
-					Node newNode;
-					if (!ProcessMftRecord(
-							buffer + (nodeIndex - BlockStart) * _diskInfo.BytesPerMftRecord,
-							_diskInfo.BytesPerMftRecord,
-							nodeIndex,
-							out newNode,
-							streams,
-							false))
+						Node newNode;
+						if (!ProcessMftRecord(
+								buffer + (nodeIndex - BlockStart) * _diskInfo.BytesPerMftRecord,
+								_diskInfo.BytesPerMftRecord,
+								nodeIndex,
+								out newNode,
+								streams,
+								false))
+							continue;
+
+						nodes[nodeIndex] = newNode;
+
+						if (streams != null)
+							_streams[nodeIndex] = streams.ToArray();
+					}
+					catch
+					{
+						// Skip invalid/unused MFT records
 						continue;
-
-					nodes[nodeIndex] = newNode;
-
-					if (streams != null)
-						_streams[nodeIndex] = streams;
+					}
 				}
 
 				stopwatch.Stop();
