@@ -75,12 +75,17 @@ namespace System.IO.Filesystem.Ntfs
 					);
 
 			if (_volumeHandle == null || _volumeHandle.IsInvalid)
+			{
+				OnDiagnosticMessage("Error", "Failed to open volume handle for {0}", volume);
 				throw new IOException(
 					string.Format(
 						"Unable to open volume {0}. Make sure it exists and that you have Administrator privileges.",
 						driveInfo
 					)
 				);
+			}
+
+			OnDiagnosticMessage("Information", "Volume handle opened successfully for {0}", volume);
 
 			using (_volumeHandle)
 			{

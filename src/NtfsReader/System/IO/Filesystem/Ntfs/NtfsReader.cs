@@ -294,6 +294,36 @@ namespace System.IO.Filesystem.Ntfs
 			}
 		}
 
+		#endregion
+
+		#region Diagnostic Event Args
+
+		/// <summary>
+		/// Event args for diagnostic messages from NtfsReader
+		/// </summary>
+		public class DiagnosticEventArgs : EventArgs
+		{
+			/// <summary>
+			/// Severity level: "Debug", "Information", "Warning", "Error"
+			/// </summary>
+			public string Level { get; private set; }
+			
+			/// <summary>
+			/// The diagnostic message
+			/// </summary>
+			public string Message { get; private set; }
+
+			public DiagnosticEventArgs(string level, string message)
+			{
+				Level = level;
+				Message = message;
+			}
+		}
+
+		#endregion
+
+		#region Private Classes (Wrappers)
+
 		/// <summary>
 		/// Add some functionality to the basic stream
 		/// </summary>
@@ -601,6 +631,27 @@ namespace System.IO.Filesystem.Ntfs
 				BitmapDataAvailable(this, EventArgs.Empty);
 		}
 
+		/// <summary>
+		/// Raised when a diagnostic message needs to be logged.
+		/// Subscribe to this event to capture internal NtfsReader diagnostics.
+		/// </summary>
+		public static event EventHandler<DiagnosticEventArgs> DiagnosticMessage;
+
+		/// <summary>
+		/// Raise a diagnostic message event
+		/// </summary>
+		private static void OnDiagnosticMessage(string level, string message, params object[] args)
+		{
+			var handler = DiagnosticMessage;
+			if (handler != null)
+			{
+				string formattedMessage = args != null && args.Length > 0 
+					? string.Format(message, args) 
+					: message;
+				handler(null, new DiagnosticEventArgs(level, formattedMessage));
+			}
+		}
+
 		#endregion
 
 		#region Helpers
@@ -702,16 +753,29 @@ namespace System.IO.Filesystem.Ntfs
 		{
 			NativeOverlapped overlapped = new NativeOverlapped(absolutePosition);
 
+			OnDiagnosticMessage("Debug", "ReadFile attempt: len={0}, pos={1}, OffsetLow={2}, OffsetHigh={3}", 
+				len, absolutePosition, overlapped.OffsetLow, overlapped.OffsetHigh);
+
 			uint read;
-			if (!ReadFile(_volumeHandle, (IntPtr)buffer, (uint)len, out read, ref overlapped))
+			bool success = ReadFile(_volumeHandle, (IntPtr)buffer, (uint)len, out read, ref overlapped);
+			
+			if (!success)
 			{
 				int errorCode = Marshal.GetLastWin32Error();
+				OnDiagnosticMessage("Error", "ReadFile FAILED: ErrorCode={0}, BytesRead={1}, Length={2}, Position={3}", 
+					errorCode, read, len, absolutePosition);
 				throw new Exception($"Unable to read volume information (Win32 Error: {errorCode})");
 			}
 
-			// We need at least MIN_BOOT_SECTOR_SIZE bytes for the boot sector to be valid
-			if (read < MIN_BOOT_SECTOR_SIZE)
-				throw new Exception($"Unable to read volume information (requested {len} bytes, got {read})");
+			if (read != (uint)len)
+			{
+				OnDiagnosticMessage("Warning", "ReadFile partial read: requested={0}, actual={1}", len, read);
+				// We need at least MIN_BOOT_SECTOR_SIZE bytes for the boot sector to be valid
+				if (read < MIN_BOOT_SECTOR_SIZE)
+					throw new Exception($"Unable to read volume information (requested {len} bytes, got {read})");
+			}
+			
+			OnDiagnosticMessage("Debug", "ReadFile success: {0} bytes at position {1}", read, absolutePosition);
 		}
 
 		private unsafe void ReadFile(byte* buffer, int len, UInt64 absolutePosition)
@@ -794,6 +858,8 @@ namespace System.IO.Filesystem.Ntfs
 		/// </summary>
 		private unsafe void InitializeDiskInfo()
 		{
+			OnDiagnosticMessage("Debug", "Initializing disk information");
+
 			// Query actual physical sector size from the drive (handles 4K native drives)
 			_physicalSectorSize = GetPhysicalSectorSize();
 
@@ -807,7 +873,12 @@ namespace System.IO.Filesystem.Ntfs
 				BootSector* bootSector = (BootSector*)ptr;
 
 				if (bootSector->Signature != 0x202020205346544E)
+				{
+					OnDiagnosticMessage("Error", "Invalid NTFS signature: 0x{0:X}", bootSector->Signature);
 					throw new Exception("This is not an NTFS disk.");
+				}
+
+				OnDiagnosticMessage("Debug", "Valid NTFS disk detected");
 
 				DiskInfoWrapper diskInfo = new DiskInfoWrapper();
 				diskInfo.BytesPerSector = bootSector->BytesPerSector;
@@ -827,6 +898,9 @@ namespace System.IO.Filesystem.Ntfs
 
 				if (diskInfo.SectorsPerCluster > 0)
 					diskInfo.TotalClusters = diskInfo.TotalSectors / diskInfo.SectorsPerCluster;
+
+				OnDiagnosticMessage("Information", "Disk Info - BytesPerSector={0}, SectorsPerCluster={1}, BytesPerMftRecord={2}, TotalClusters={3}",
+					diskInfo.BytesPerSector, diskInfo.SectorsPerCluster, diskInfo.BytesPerMftRecord, diskInfo.TotalClusters);
 
 				_diskInfo = diskInfo;
 			}
@@ -1361,9 +1435,13 @@ namespace System.IO.Filesystem.Ntfs
 		/// </summary>
 		private unsafe Node[] ProcessMft()
 		{
+			OnDiagnosticMessage("Information", "Starting MFT processing");
+
 			//64 KB seems to be optimal for Windows XP, Vista is happier with 256KB...
 			uint bufferSize =
 				(Environment.OSVersion.Version.Major >= 6 ? 256u : 64u) * 1024;
+
+			OnDiagnosticMessage("Debug", "Using buffer size: {0} KB", bufferSize / 1024);
 
 			byte[] data = new byte[bufferSize];
 
@@ -1476,6 +1554,8 @@ namespace System.IO.Filesystem.Ntfs
 						((float)totalBytesRead / (1024*1024)) / stopwatch.Elapsed.TotalSeconds
 					)
 				);
+
+				OnDiagnosticMessage("Information", "MFT processing complete - {0} nodes processed", maxInode);
 
 				return nodes;
 			}
