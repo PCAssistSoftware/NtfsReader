@@ -603,6 +603,17 @@ namespace System.IO.Filesystem.Ntfs
 
 		#endregion
 
+		#region Static Properties
+
+		/// <summary>
+		/// Enable verbose diagnostic logging (Debug level messages).
+		/// When false (default), only Information, Warning, and Error messages are logged.
+		/// Set to true when troubleshooting specific issues.
+		/// </summary>
+		public static bool EnableVerboseDiagnostics { get; set; } = false;
+
+		#endregion
+
 		SafeFileHandle _volumeHandle;
 		DiskInfoWrapper _diskInfo;
 		Node[] _nodes;
@@ -753,14 +764,19 @@ namespace System.IO.Filesystem.Ntfs
 		{
 			NativeOverlapped overlapped = new NativeOverlapped(absolutePosition);
 
-			OnDiagnosticMessage("Debug", "ReadFile attempt: len={0}, pos={1}, OffsetLow={2}, OffsetHigh={3}", 
-				len, absolutePosition, overlapped.OffsetLow, overlapped.OffsetHigh);
+			// Only log read attempts if verbose diagnostics enabled
+			if (EnableVerboseDiagnostics)
+			{
+				OnDiagnosticMessage("Debug", "ReadFile attempt: len={0}, pos={1}, OffsetLow={2}, OffsetHigh={3}", 
+					len, absolutePosition, overlapped.OffsetLow, overlapped.OffsetHigh);
+			}
 
 			uint read;
 			bool success = ReadFile(_volumeHandle, (IntPtr)buffer, (uint)len, out read, ref overlapped);
 			
 			if (!success)
 			{
+				// ALWAYS log errors regardless of verbose flag
 				int errorCode = Marshal.GetLastWin32Error();
 				OnDiagnosticMessage("Error", "ReadFile FAILED: ErrorCode={0}, BytesRead={1}, Length={2}, Position={3}", 
 					errorCode, read, len, absolutePosition);
@@ -769,13 +785,18 @@ namespace System.IO.Filesystem.Ntfs
 
 			if (read != (uint)len)
 			{
+				// ALWAYS log warnings regardless of verbose flag
 				OnDiagnosticMessage("Warning", "ReadFile partial read: requested={0}, actual={1}", len, read);
 				// We need at least MIN_BOOT_SECTOR_SIZE bytes for the boot sector to be valid
 				if (read < MIN_BOOT_SECTOR_SIZE)
 					throw new Exception($"Unable to read volume information (requested {len} bytes, got {read})");
 			}
 			
-			OnDiagnosticMessage("Debug", "ReadFile success: {0} bytes at position {1}", read, absolutePosition);
+			// Only log successful reads if verbose diagnostics enabled
+			if (EnableVerboseDiagnostics)
+			{
+				OnDiagnosticMessage("Debug", "ReadFile success: {0} bytes at position {1}", read, absolutePosition);
+			}
 		}
 
 		private unsafe void ReadFile(byte* buffer, int len, UInt64 absolutePosition)
@@ -858,7 +879,8 @@ namespace System.IO.Filesystem.Ntfs
 		/// </summary>
 		private unsafe void InitializeDiskInfo()
 		{
-			OnDiagnosticMessage("Debug", "Initializing disk information");
+			// Change from "Debug" to "Information" so it's always logged
+			OnDiagnosticMessage("Information", "Initializing disk information");
 
 			// Query actual physical sector size from the drive (handles 4K native drives)
 			_physicalSectorSize = GetPhysicalSectorSize();
@@ -878,7 +900,8 @@ namespace System.IO.Filesystem.Ntfs
 					throw new Exception("This is not an NTFS disk.");
 				}
 
-				OnDiagnosticMessage("Debug", "Valid NTFS disk detected");
+				// Change from "Debug" to "Information" - this is important milestone
+				OnDiagnosticMessage("Information", "Valid NTFS disk detected");
 
 				DiskInfoWrapper diskInfo = new DiskInfoWrapper();
 				diskInfo.BytesPerSector = bootSector->BytesPerSector;
@@ -923,15 +946,19 @@ namespace System.IO.Filesystem.Ntfs
 
 			UInt32 Index = increment - 1;
 
-			// Add diagnostic logging
-			OnDiagnosticMessage("Debug", "FixupRawMftdata - len={0}, UsaCount={1}, BytesPerSector={2}, increment={3}", 
-				len, ntfsFileRecordHeader->RecordHeader.UsaCount, _diskInfo.BytesPerSector, increment);
+			// Only log if verbose diagnostics enabled
+			if (EnableVerboseDiagnostics)
+			{
+				OnDiagnosticMessage("Debug", "FixupRawMftdata - len={0}, UsaCount={1}, BytesPerSector={2}, increment={3}", 
+					len, ntfsFileRecordHeader->RecordHeader.UsaCount, _diskInfo.BytesPerSector, increment);
+			}
 
 			for (int i = 1; i < ntfsFileRecordHeader->RecordHeader.UsaCount; i++)
 			{
 				/* Check if we are inside the buffer. */
 				if (Index * sizeof(UInt16) >= len)
 				{
+					// ALWAYS log errors regardless of verbose flag
 					OnDiagnosticMessage("Error", "USA fixup index out of bounds - Index={0}, len={1}, i={2}, UsaCount={3}", 
 						Index, len, i, ntfsFileRecordHeader->RecordHeader.UsaCount);
 					throw new Exception("USA data indicates that data is missing, the MFT may be corrupt.");
@@ -940,7 +967,8 @@ namespace System.IO.Filesystem.Ntfs
 				// Check if the last 2 bytes of the sector contain the Update Sequence Number.
 				if (wordBuffer[Index] != UpdateSequenceArray[0])
 				{
-					OnDiagnosticMessage("Warning", "USA fixup mismatch at Index={0} - expected={1}, actual={2}", 
+					// ALWAYS log errors regardless of verbose flag
+					OnDiagnosticMessage("Error", "USA fixup mismatch at Index={0} - expected={1}, actual={2}", 
 						Index, UpdateSequenceArray[0], wordBuffer[Index]);
 					throw new Exception("USA fixup word is not equal to the Update Sequence Number, the MFT may be corrupt.");
 				}
@@ -950,7 +978,11 @@ namespace System.IO.Filesystem.Ntfs
 				Index = Index + increment;
 			}
 			
-			OnDiagnosticMessage("Debug", "FixupRawMftdata completed successfully");
+			// Only log success if verbose diagnostics enabled
+			if (EnableVerboseDiagnostics)
+			{
+				OnDiagnosticMessage("Debug", "FixupRawMftdata completed successfully");
+			}
 		}
 
 		/// <summary>
@@ -1455,7 +1487,11 @@ namespace System.IO.Filesystem.Ntfs
 			uint bufferSize =
 				(Environment.OSVersion.Version.Major >= 6 ? 256u : 64u) * 1024;
 
-			OnDiagnosticMessage("Debug", "Using buffer size: {0} KB", bufferSize / 1024);
+			// Only log buffer size if verbose enabled
+			if (EnableVerboseDiagnostics)
+			{
+				OnDiagnosticMessage("Debug", "Using buffer size: {0} KB", bufferSize / 1024);
+			}
 
 			byte[] data = new byte[bufferSize];
 
