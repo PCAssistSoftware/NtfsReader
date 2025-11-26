@@ -568,6 +568,8 @@ namespace System.IO.Filesystem.Ntfs
 
 		private const UInt64 VIRTUALFRAGMENT = 18446744073709551615; // _UI64_MAX - 1 */
 		private const UInt32 ROOTDIRECTORY = 5;
+		private const uint MIN_BOOT_SECTOR_SIZE = 512;
+		private const uint MAX_SUPPORTED_SECTOR_SIZE = 8192;
 
 		#endregion
 
@@ -673,23 +675,23 @@ namespace System.IO.Filesystem.Ntfs
 
 				if (success && descriptor.BytesPerPhysicalSector > 0)
 				{
-					// Return the physical sector size, but ensure it's at least 512
-					uint sectorSize = Math.Max(512, descriptor.BytesPerPhysicalSector);
+					// Return the physical sector size, but ensure it's at least MIN_BOOT_SECTOR_SIZE
+					uint sectorSize = Math.Max(MIN_BOOT_SECTOR_SIZE, descriptor.BytesPerPhysicalSector);
 
-					// For safety, cap at 8192 (supports future larger sector drives)
-					if (sectorSize > 8192)
-						sectorSize = 8192;
+					// For safety, cap at MAX_SUPPORTED_SECTOR_SIZE (supports future larger sector drives)
+					if (sectorSize > MAX_SUPPORTED_SECTOR_SIZE)
+						sectorSize = MAX_SUPPORTED_SECTOR_SIZE;
 
 					return sectorSize;
 				}
 			}
 			catch
 			{
-				// Fall back to 512 if query fails
+				// Fall back to MIN_BOOT_SECTOR_SIZE if query fails
 			}
 
-			// Default to 512 bytes if we can't determine
-			return 512;
+			// Default to MIN_BOOT_SECTOR_SIZE bytes if we can't determine
+			return MIN_BOOT_SECTOR_SIZE;
 		}
 
 		#endregion
@@ -707,8 +709,8 @@ namespace System.IO.Filesystem.Ntfs
 				throw new Exception($"Unable to read volume information (Win32 Error: {errorCode})");
 			}
 
-			// We need at least 512 bytes for the boot sector to be valid
-			if (read < 512)
+			// We need at least MIN_BOOT_SECTOR_SIZE bytes for the boot sector to be valid
+			if (read < MIN_BOOT_SECTOR_SIZE)
 				throw new Exception($"Unable to read volume information (requested {len} bytes, got {read})");
 		}
 
