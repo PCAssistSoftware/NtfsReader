@@ -905,6 +905,10 @@ namespace System.IO.Filesystem.Ntfs
 			UInt64 requestedReadSize = (BlockEnd - BlockStart) * _diskInfo.BytesPerMftRecord;
 			UInt64 alignedReadSize = GetAlignedReadSize(requestedReadSize);
 			
+			// Safety check: ensure we don't read more than the buffer can hold
+			if (alignedReadSize > bufferSize)
+				alignedReadSize = bufferSize;
+			
 			ReadFile(buffer, alignedReadSize, position);
 
 			return true;
@@ -1534,6 +1538,7 @@ namespace System.IO.Filesystem.Ntfs
 			fixed (byte* buffer = data)
 			{
 				// Calculate the actual read size - must be a multiple of sector size for 4K drives
+				// Note: mftReadSize is at most MAX_SUPPORTED_SECTOR_SIZE (8KB), which is much less than bufferSize (64KB+)
 				UInt64 mftReadSize = GetAlignedReadSize(_diskInfo.BytesPerMftRecord);
 				
 				//Read the $MFT record from disk into memory, which is always the first record in the MFT. 
