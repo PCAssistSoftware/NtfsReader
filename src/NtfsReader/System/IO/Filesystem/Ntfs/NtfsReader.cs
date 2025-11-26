@@ -757,6 +757,16 @@ namespace System.IO.Filesystem.Ntfs
 		}
 
 		/// <summary>
+		/// Gets the effective sector size for alignment requirements.
+		/// Uses the larger of logical and physical sector sizes to ensure alignment
+		/// on both legacy and 4K native sector drives.
+		/// </summary>
+		private uint EffectiveSectorSize
+		{
+			get { return Math.Max(_diskInfo.BytesPerSector, _physicalSectorSize); }
+		}
+
+		/// <summary>
 		/// Get the actual read size needed to satisfy sector alignment requirements.
 		/// On 4K native sector drives, reads must be a multiple of the sector size.
 		/// When BytesPerMftRecord (e.g., 1024) is smaller than BytesPerSector (e.g., 4096),
@@ -766,8 +776,7 @@ namespace System.IO.Filesystem.Ntfs
 		/// <returns>The actual size to read, rounded up to sector boundary if necessary</returns>
 		private UInt64 GetAlignedReadSize(UInt64 requestedSize)
 		{
-			// Use the larger of logical and physical sector sizes to ensure alignment
-			uint sectorSize = Math.Max(_diskInfo.BytesPerSector, _physicalSectorSize);
+			uint sectorSize = EffectiveSectorSize;
 			
 			if (requestedSize < sectorSize)
 			{
@@ -897,19 +906,65 @@ namespace System.IO.Filesystem.Ntfs
 			if (BlockEnd >= u1)
 				BlockEnd = u1;
 
-			ulong position =
+			// Calculate the requested position and size
+			ulong basePosition =
 				(dataStream.Fragments[fragmentIndex].Lcn - RealVcn) * _diskInfo.BytesPerSector *
-					_diskInfo.SectorsPerCluster + BlockStart * _diskInfo.BytesPerMftRecord;
+					_diskInfo.SectorsPerCluster;
 
-			// Calculate the actual read size - must be a multiple of sector size for 4K drives
+			ulong requestedPosition = basePosition + BlockStart * _diskInfo.BytesPerMftRecord;
 			UInt64 requestedReadSize = (BlockEnd - BlockStart) * _diskInfo.BytesPerMftRecord;
-			UInt64 alignedReadSize = GetAlignedReadSize(requestedReadSize);
-			
+
+			// Use the shared EffectiveSectorSize property for consistency
+			ulong sectorSize = EffectiveSectorSize;
+
+			// CRITICAL: Align position DOWN to sector boundary for 4K native sector drives
+			// When BytesPerMftRecord < BytesPerSector, the calculated position may not be sector-aligned
+			ulong alignedPosition = (requestedPosition / sectorSize) * sectorSize;
+			ulong offsetInSector = requestedPosition - alignedPosition;
+
+			// Calculate aligned read size (must include offset + requested data)
+			UInt64 totalNeeded = offsetInSector + requestedReadSize;
+			UInt64 alignedReadSize = GetAlignedReadSize(totalNeeded);
+
 			// Safety check: ensure we don't read more than the buffer can hold
 			if (alignedReadSize > bufferSize)
+			{
 				alignedReadSize = bufferSize;
-			
-			ReadFile(buffer, alignedReadSize, position);
+				// Safety check: ensure alignedReadSize >= offsetInSector to prevent underflow
+				if (alignedReadSize < offsetInSector)
+				{
+					OnDiagnosticMessage("Error", "Buffer too small for sector-aligned read: buffer={0}, offset={1}", 
+						bufferSize, offsetInSector);
+					return false;
+				}
+				// Recalculate how much actual data we can get after offset
+				UInt64 availableData = alignedReadSize - offsetInSector;
+				// Adjust BlockEnd based on available data
+				BlockEnd = BlockStart + (availableData / _diskInfo.BytesPerMftRecord);
+			}
+
+			// Log position alignment if it occurred
+			if (offsetInSector > 0 && EnableVerboseDiagnostics)
+			{
+				OnDiagnosticMessage("Debug", "Position aligned from {0} to {1}, offset={2}", 
+					requestedPosition, alignedPosition, offsetInSector);
+			}
+
+			// Read from sector-aligned position
+			ReadFile(buffer, alignedReadSize, alignedPosition);
+
+			// If we had to align the position, shift the data to the beginning of the buffer
+			// This ensures the caller sees MFT records starting at buffer[0] as expected
+			if (offsetInSector > 0)
+			{
+				// Move data so it starts at buffer[0]
+				// Use Buffer.MemoryCopy for efficient bulk memory operations
+				ulong bytesToMove = alignedReadSize - offsetInSector;
+				// Safety check: ensure we don't copy more than the buffer can hold
+				if (bytesToMove > bufferSize)
+					bytesToMove = bufferSize;
+				Buffer.MemoryCopy(buffer + offsetInSector, buffer, bufferSize, (long)bytesToMove);
+			}
 
 			return true;
 		}
