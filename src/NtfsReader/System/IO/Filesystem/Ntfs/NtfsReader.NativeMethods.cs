@@ -41,8 +41,45 @@ namespace System.IO.Filesystem.Ntfs
         [DllImport("kernel32", CharSet = CharSet.Auto, BestFitMapping = false)]
         private static extern SafeFileHandle CreateFile(string lpFileName, FileAccess fileAccess, FileShare fileShare, IntPtr lpSecurityAttributes, FileMode fileMode, int dwFlagsAndAttributes, IntPtr hTemplateFile);
 
-        [DllImport("kernel32", CharSet = CharSet.Auto)]
+        [DllImport("kernel32", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern bool ReadFile(SafeFileHandle hFile, IntPtr lpBuffer, uint nNumberOfBytesToRead, out uint lpNumberOfBytesRead, ref NativeOverlapped lpOverlapped);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool DeviceIoControl(
+            SafeFileHandle hDevice,
+            uint dwIoControlCode,
+            ref STORAGE_PROPERTY_QUERY lpInBuffer,
+            uint nInBufferSize,
+            ref STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR lpOutBuffer,
+            uint nOutBufferSize,
+            out uint lpBytesReturned,
+            IntPtr lpOverlapped);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct STORAGE_PROPERTY_QUERY
+        {
+            public uint PropertyId;
+            public uint QueryType;
+            public byte AdditionalParameters;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR
+        {
+            public uint Version;
+            public uint Size;
+            public uint BytesPerCacheLine;
+            public uint BytesOffsetForCacheAlignment;
+            public uint BytesPerLogicalSector;
+            public uint BytesPerPhysicalSector;
+            public uint BytesOffsetForSectorAlignment;
+        }
+
+        // StorageAccessAlignmentProperty = 6
+        private const uint StorageAccessAlignmentProperty = 6;
+        // PropertyStandardQuery = 0
+        private const uint PropertyStandardQuery = 0;
+        private const uint IOCTL_STORAGE_QUERY_PROPERTY = 0x002d1400;
 
         [Serializable]
         private enum FileMode : int
