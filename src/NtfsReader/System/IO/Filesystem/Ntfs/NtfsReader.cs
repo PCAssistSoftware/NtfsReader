@@ -923,20 +923,34 @@ namespace System.IO.Filesystem.Ntfs
 
 			UInt32 Index = increment - 1;
 
+			// Add diagnostic logging
+			OnDiagnosticMessage("Debug", "FixupRawMftdata - len={0}, UsaCount={1}, BytesPerSector={2}, increment={3}", 
+				len, ntfsFileRecordHeader->RecordHeader.UsaCount, _diskInfo.BytesPerSector, increment);
+
 			for (int i = 1; i < ntfsFileRecordHeader->RecordHeader.UsaCount; i++)
 			{
 				/* Check if we are inside the buffer. */
 				if (Index * sizeof(UInt16) >= len)
+				{
+					OnDiagnosticMessage("Error", "USA fixup index out of bounds - Index={0}, len={1}, i={2}, UsaCount={3}", 
+						Index, len, i, ntfsFileRecordHeader->RecordHeader.UsaCount);
 					throw new Exception("USA data indicates that data is missing, the MFT may be corrupt.");
+				}
 
 				// Check if the last 2 bytes of the sector contain the Update Sequence Number.
 				if (wordBuffer[Index] != UpdateSequenceArray[0])
+				{
+					OnDiagnosticMessage("Warning", "USA fixup mismatch at Index={0} - expected={1}, actual={2}", 
+						Index, UpdateSequenceArray[0], wordBuffer[Index]);
 					throw new Exception("USA fixup word is not equal to the Update Sequence Number, the MFT may be corrupt.");
+				}
 
 				/* Replace the last 2 bytes in the sector with the value from the Usa array. */
 				wordBuffer[Index] = UpdateSequenceArray[i];
 				Index = Index + increment;
 			}
+			
+			OnDiagnosticMessage("Debug", "FixupRawMftdata completed successfully");
 		}
 
 		/// <summary>
