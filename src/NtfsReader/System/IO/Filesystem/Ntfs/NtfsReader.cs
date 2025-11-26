@@ -955,11 +955,14 @@ namespace System.IO.Filesystem.Ntfs
 
 			// If we had to align the position, shift the data to the beginning of the buffer
 			// This ensures the caller sees MFT records starting at buffer[0] as expected
-			if (offsetInSector > 0 && offsetInSector < alignedReadSize)
+			if (offsetInSector > 0)
 			{
 				// Move data so it starts at buffer[0]
 				// Use Buffer.MemoryCopy for efficient bulk memory operations
 				ulong bytesToMove = alignedReadSize - offsetInSector;
+				// Safety check: ensure we don't copy more than the buffer can hold
+				if (bytesToMove > bufferSize)
+					bytesToMove = bufferSize;
 				Buffer.MemoryCopy(buffer + offsetInSector, buffer, bufferSize, (long)bytesToMove);
 			}
 
