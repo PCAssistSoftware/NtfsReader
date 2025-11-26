@@ -181,5 +181,35 @@ namespace NtfsReaderTests
 			// Should not throw when no handlers are subscribed
 			Assert.AreEqual(0, receivedMessages.Count);
 		}
+
+		[TestMethod]
+		public void EnableVerboseDiagnostics_ShouldDefaultToFalse()
+		{
+			// Verify the default value is false
+			Assert.IsFalse(NtfsReader.EnableVerboseDiagnostics);
+		}
+
+		[TestMethod]
+		public void EnableVerboseDiagnostics_ShouldBeSettable()
+		{
+			// Store original value
+			var originalValue = NtfsReader.EnableVerboseDiagnostics;
+			
+			try
+			{
+				// Test setting to true
+				NtfsReader.EnableVerboseDiagnostics = true;
+				Assert.IsTrue(NtfsReader.EnableVerboseDiagnostics);
+				
+				// Test setting to false
+				NtfsReader.EnableVerboseDiagnostics = false;
+				Assert.IsFalse(NtfsReader.EnableVerboseDiagnostics);
+			}
+			finally
+			{
+				// Restore original value
+				NtfsReader.EnableVerboseDiagnostics = originalValue;
+			}
+		}
 	}
 }
