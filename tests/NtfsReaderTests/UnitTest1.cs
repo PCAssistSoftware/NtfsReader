@@ -234,7 +234,7 @@ namespace NtfsReaderTests
 			Assert.AreEqual(512u, logicalSectorSize2, "4096-byte MFT with UsaCount=9 should have 512-byte logical sectors");
 			
 			// Scenario 3: 1024-byte MFT record with UsaCount=5
-			// This would represent 4 sectors of 256 bytes each (unlikely, but tests the formula)
+			// This is a theoretical test case to verify the formula works for any valid UsaCount
 			// Expected: logicalSectorSize = 1024 / (5-1) = 256
 			uint bytesPerMftRecord3 = 1024;
 			ushort usaCount3 = 5;
