@@ -1037,15 +1037,32 @@ namespace System.IO.Filesystem.Ntfs
 			UInt16* wordBuffer = (UInt16*)buffer;
 
 			UInt16* UpdateSequenceArray = (UInt16*)(buffer + ntfsFileRecordHeader->RecordHeader.UsaOffset);
-			UInt32 increment = (UInt32)_diskInfo.BytesPerSector / sizeof(UInt16);
-
+			
+			// CRITICAL: The increment is based on the LOGICAL sector size used when formatting the MFT record,
+			// NOT the physical sector size of the drive.
+			// For a 1024-byte MFT record with UsaCount=3: logical sector size = 1024/2 = 512 bytes
+			// This fixes the issue on 4K native sector drives where BytesPerMftRecord (1024) < BytesPerSector (4096)
+			UInt32 logicalSectorSize;
+			if (ntfsFileRecordHeader->RecordHeader.UsaCount > 1)
+			{
+				// Calculate logical sector size: MFT record size / number of sectors
+				// UsaCount = 1 + (number of sectors in the record)
+				logicalSectorSize = (UInt32)(_diskInfo.BytesPerMftRecord / (UInt32)(ntfsFileRecordHeader->RecordHeader.UsaCount - 1));
+			}
+			else
+			{
+				// Fallback to physical sector size if UsaCount is invalid
+				logicalSectorSize = _diskInfo.BytesPerSector;
+			}
+			
+			UInt32 increment = logicalSectorSize / sizeof(UInt16);
 			UInt32 Index = increment - 1;
 
 			// Only log if verbose diagnostics enabled
 			if (EnableVerboseDiagnostics)
 			{
-				OnDiagnosticMessage("Debug", "FixupRawMftdata - len={0}, UsaCount={1}, BytesPerSector={2}, increment={3}", 
-					len, ntfsFileRecordHeader->RecordHeader.UsaCount, _diskInfo.BytesPerSector, increment);
+				OnDiagnosticMessage("Debug", "FixupRawMftdata - len={0}, UsaCount={1}, logicalSectorSize={2}, increment={3}", 
+					len, ntfsFileRecordHeader->RecordHeader.UsaCount, logicalSectorSize, increment);
 			}
 
 			for (int i = 1; i < ntfsFileRecordHeader->RecordHeader.UsaCount; i++)
