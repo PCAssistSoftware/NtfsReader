@@ -757,6 +757,16 @@ namespace System.IO.Filesystem.Ntfs
 		}
 
 		/// <summary>
+		/// Gets the effective sector size for alignment requirements.
+		/// Uses the larger of logical and physical sector sizes to ensure alignment
+		/// on both legacy and 4K native sector drives.
+		/// </summary>
+		private uint EffectiveSectorSize
+		{
+			get { return Math.Max(_diskInfo.BytesPerSector, _physicalSectorSize); }
+		}
+
+		/// <summary>
 		/// Get the actual read size needed to satisfy sector alignment requirements.
 		/// On 4K native sector drives, reads must be a multiple of the sector size.
 		/// When BytesPerMftRecord (e.g., 1024) is smaller than BytesPerSector (e.g., 4096),
@@ -766,8 +776,7 @@ namespace System.IO.Filesystem.Ntfs
 		/// <returns>The actual size to read, rounded up to sector boundary if necessary</returns>
 		private UInt64 GetAlignedReadSize(UInt64 requestedSize)
 		{
-			// Use the larger of logical and physical sector sizes to ensure alignment
-			uint sectorSize = Math.Max(_diskInfo.BytesPerSector, _physicalSectorSize);
+			uint sectorSize = EffectiveSectorSize;
 			
 			if (requestedSize < sectorSize)
 			{
@@ -905,8 +914,8 @@ namespace System.IO.Filesystem.Ntfs
 			ulong requestedPosition = basePosition + BlockStart * _diskInfo.BytesPerMftRecord;
 			UInt64 requestedReadSize = (BlockEnd - BlockStart) * _diskInfo.BytesPerMftRecord;
 
-			// Get sector size for alignment (use larger of logical and physical)
-			ulong sectorSize = Math.Max(_diskInfo.BytesPerSector, _physicalSectorSize);
+			// Use the shared EffectiveSectorSize property for consistency
+			ulong sectorSize = EffectiveSectorSize;
 
 			// CRITICAL: Align position DOWN to sector boundary for 4K native sector drives
 			// When BytesPerMftRecord < BytesPerSector, the calculated position may not be sector-aligned
@@ -921,6 +930,13 @@ namespace System.IO.Filesystem.Ntfs
 			if (alignedReadSize > bufferSize)
 			{
 				alignedReadSize = bufferSize;
+				// Safety check: ensure alignedReadSize >= offsetInSector to prevent underflow
+				if (alignedReadSize < offsetInSector)
+				{
+					OnDiagnosticMessage("Error", "Buffer too small for sector-aligned read: buffer={0}, offset={1}", 
+						bufferSize, offsetInSector);
+					return false;
+				}
 				// Recalculate how much actual data we can get after offset
 				UInt64 availableData = alignedReadSize - offsetInSector;
 				// Adjust BlockEnd based on available data
@@ -939,15 +955,12 @@ namespace System.IO.Filesystem.Ntfs
 
 			// If we had to align the position, shift the data to the beginning of the buffer
 			// This ensures the caller sees MFT records starting at buffer[0] as expected
-			if (offsetInSector > 0)
+			if (offsetInSector > 0 && offsetInSector < alignedReadSize)
 			{
 				// Move data so it starts at buffer[0]
-				// Using forward iteration which is safe for overlapping regions when dest < src
+				// Use Buffer.MemoryCopy for efficient bulk memory operations
 				ulong bytesToMove = alignedReadSize - offsetInSector;
-				for (ulong i = 0; i < bytesToMove; i++)
-				{
-					buffer[i] = buffer[i + offsetInSector];
-				}
+				Buffer.MemoryCopy(buffer + offsetInSector, buffer, bufferSize, (long)bytesToMove);
 			}
 
 			return true;
