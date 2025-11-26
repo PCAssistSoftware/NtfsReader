@@ -19,7 +19,7 @@ Private Sub Form1_Load(ByVal sender As Object, ByVal e As EventArgs) Handles Me.
     ' Subscribe to NtfsReader diagnostic messages
     AddHandler NtfsReader.DiagnosticMessage, AddressOf NtfsReader_DiagnosticMessage
 
-    ' Enable verbose diagnostics (optional - only when troubleshooting - will make logs large!)
+    ' Enable verbose diagnostics (optional - only when troubleshooting - will make logs large and app slower!)       
     NtfsReader.EnableVerboseDiagnostics = True  ' ✅ Set to False for normal use
     
     ' ...  rest of your code ...
