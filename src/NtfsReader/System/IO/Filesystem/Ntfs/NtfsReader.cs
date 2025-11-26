@@ -579,6 +579,7 @@ namespace System.IO.Filesystem.Ntfs
 		DriveInfo _driveInfo;
 		List<string> _names = new List<string>();
 		RetrieveMode _retrieveMode;
+		uint _physicalSectorSize = 512; // Default physical sector size, updated after querying drive
 
 		//preallocate a lot of space for the strings to avoid too much dictionary resizing
 		//use ordinal comparison to improve performance
@@ -644,6 +645,53 @@ namespace System.IO.Filesystem.Ntfs
 			return null;
 		}
 
+		/// <summary>
+		/// Query the physical sector size from the drive.
+		/// This is needed to support 4K native sector drives (Advanced Format).
+		/// </summary>
+		private uint GetPhysicalSectorSize()
+		{
+			try
+			{
+				var query = new STORAGE_PROPERTY_QUERY();
+				query.PropertyId = StorageAccessAlignmentProperty;
+				query.QueryType = PropertyStandardQuery;
+				query.AdditionalParameters = 0;
+
+				var descriptor = new STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR();
+
+				uint bytesReturned;
+				bool success = DeviceIoControl(
+					_volumeHandle,
+					IOCTL_STORAGE_QUERY_PROPERTY,
+					ref query,
+					(uint)Marshal.SizeOf(typeof(STORAGE_PROPERTY_QUERY)),
+					ref descriptor,
+					(uint)Marshal.SizeOf(typeof(STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR)),
+					out bytesReturned,
+					IntPtr.Zero);
+
+				if (success && descriptor.BytesPerPhysicalSector > 0)
+				{
+					// Return the physical sector size, but ensure it's at least 512
+					uint sectorSize = Math.Max(512, descriptor.BytesPerPhysicalSector);
+
+					// For safety, cap at 8192 (supports future larger sector drives)
+					if (sectorSize > 8192)
+						sectorSize = 8192;
+
+					return sectorSize;
+				}
+			}
+			catch
+			{
+				// Fall back to 512 if query fails
+			}
+
+			// Default to 512 bytes if we can't determine
+			return 512;
+		}
+
 		#endregion
 
 		#region File Reading Wrappers
@@ -654,10 +702,14 @@ namespace System.IO.Filesystem.Ntfs
 
 			uint read;
 			if (!ReadFile(_volumeHandle, (IntPtr)buffer, (uint)len, out read, ref overlapped))
-				throw new Exception("Unable to read volume information");
+			{
+				int errorCode = Marshal.GetLastWin32Error();
+				throw new Exception($"Unable to read volume information (Win32 Error: {errorCode})");
+			}
 
-			if (read != (uint)len)
-				throw new Exception("Unable to read volume information");
+			// We need at least 512 bytes for the boot sector to be valid
+			if (read < 512)
+				throw new Exception($"Unable to read volume information (requested {len} bytes, got {read})");
 		}
 
 		private unsafe void ReadFile(byte* buffer, int len, UInt64 absolutePosition)
@@ -740,11 +792,15 @@ namespace System.IO.Filesystem.Ntfs
 		/// </summary>
 		private unsafe void InitializeDiskInfo()
 		{
-			byte[] volumeData = new byte[512];
+			// Query actual physical sector size from the drive (handles 4K native drives)
+			_physicalSectorSize = GetPhysicalSectorSize();
+
+			// Allocate buffer aligned to actual physical sector size
+			byte[] volumeData = new byte[_physicalSectorSize];
 
 			fixed (byte* ptr = volumeData)
 			{
-				ReadFile(ptr, volumeData.Length, 0);
+				ReadFile(ptr, (int)_physicalSectorSize, 0);
 
 				BootSector* bootSector = (BootSector*)ptr;
 
