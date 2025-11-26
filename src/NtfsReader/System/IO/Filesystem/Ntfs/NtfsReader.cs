@@ -897,19 +897,58 @@ namespace System.IO.Filesystem.Ntfs
 			if (BlockEnd >= u1)
 				BlockEnd = u1;
 
-			ulong position =
+			// Calculate the requested position and size
+			ulong basePosition =
 				(dataStream.Fragments[fragmentIndex].Lcn - RealVcn) * _diskInfo.BytesPerSector *
-					_diskInfo.SectorsPerCluster + BlockStart * _diskInfo.BytesPerMftRecord;
+					_diskInfo.SectorsPerCluster;
 
-			// Calculate the actual read size - must be a multiple of sector size for 4K drives
+			ulong requestedPosition = basePosition + BlockStart * _diskInfo.BytesPerMftRecord;
 			UInt64 requestedReadSize = (BlockEnd - BlockStart) * _diskInfo.BytesPerMftRecord;
-			UInt64 alignedReadSize = GetAlignedReadSize(requestedReadSize);
-			
+
+			// Get sector size for alignment (use larger of logical and physical)
+			ulong sectorSize = Math.Max(_diskInfo.BytesPerSector, _physicalSectorSize);
+
+			// CRITICAL: Align position DOWN to sector boundary for 4K native sector drives
+			// When BytesPerMftRecord < BytesPerSector, the calculated position may not be sector-aligned
+			ulong alignedPosition = (requestedPosition / sectorSize) * sectorSize;
+			ulong offsetInSector = requestedPosition - alignedPosition;
+
+			// Calculate aligned read size (must include offset + requested data)
+			UInt64 totalNeeded = offsetInSector + requestedReadSize;
+			UInt64 alignedReadSize = GetAlignedReadSize(totalNeeded);
+
 			// Safety check: ensure we don't read more than the buffer can hold
 			if (alignedReadSize > bufferSize)
+			{
 				alignedReadSize = bufferSize;
-			
-			ReadFile(buffer, alignedReadSize, position);
+				// Recalculate how much actual data we can get after offset
+				UInt64 availableData = alignedReadSize - offsetInSector;
+				// Adjust BlockEnd based on available data
+				BlockEnd = BlockStart + (availableData / _diskInfo.BytesPerMftRecord);
+			}
+
+			// Log position alignment if it occurred
+			if (offsetInSector > 0 && EnableVerboseDiagnostics)
+			{
+				OnDiagnosticMessage("Debug", "Position aligned from {0} to {1}, offset={2}", 
+					requestedPosition, alignedPosition, offsetInSector);
+			}
+
+			// Read from sector-aligned position
+			ReadFile(buffer, alignedReadSize, alignedPosition);
+
+			// If we had to align the position, shift the data to the beginning of the buffer
+			// This ensures the caller sees MFT records starting at buffer[0] as expected
+			if (offsetInSector > 0)
+			{
+				// Move data so it starts at buffer[0]
+				// Using forward iteration which is safe for overlapping regions when dest < src
+				ulong bytesToMove = alignedReadSize - offsetInSector;
+				for (ulong i = 0; i < bytesToMove; i++)
+				{
+					buffer[i] = buffer[i + offsetInSector];
+				}
+			}
 
 			return true;
 		}
