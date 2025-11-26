@@ -322,7 +322,7 @@ namespace System.IO.Filesystem.Ntfs
 
 		#endregion
 
-		#region Private Classes (continued)
+		#region Private Classes (Wrappers)
 
 		/// <summary>
 		/// Add some functionality to the basic stream
@@ -642,12 +642,13 @@ namespace System.IO.Filesystem.Ntfs
 		/// </summary>
 		private static void OnDiagnosticMessage(string level, string message, params object[] args)
 		{
-			if (DiagnosticMessage != null)
+			var handler = DiagnosticMessage;
+			if (handler != null)
 			{
 				string formattedMessage = args != null && args.Length > 0 
 					? string.Format(message, args) 
 					: message;
-				DiagnosticMessage(null, new DiagnosticEventArgs(level, formattedMessage));
+				handler(null, new DiagnosticEventArgs(level, formattedMessage));
 			}
 		}
 
