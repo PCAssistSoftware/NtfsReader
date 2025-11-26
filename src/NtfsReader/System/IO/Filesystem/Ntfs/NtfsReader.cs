@@ -756,6 +756,38 @@ namespace System.IO.Filesystem.Ntfs
 			return MIN_BOOT_SECTOR_SIZE;
 		}
 
+		/// <summary>
+		/// Get the actual read size needed to satisfy sector alignment requirements.
+		/// On 4K native sector drives, reads must be a multiple of the sector size.
+		/// When BytesPerMftRecord (e.g., 1024) is smaller than BytesPerSector (e.g., 4096),
+		/// we need to read at least one full sector.
+		/// </summary>
+		/// <param name="requestedSize">The number of bytes we want to read</param>
+		/// <returns>The actual size to read, rounded up to sector boundary if necessary</returns>
+		private UInt64 GetAlignedReadSize(UInt64 requestedSize)
+		{
+			// Use the larger of logical and physical sector sizes to ensure alignment
+			uint sectorSize = Math.Max(_diskInfo.BytesPerSector, _physicalSectorSize);
+			
+			if (requestedSize < sectorSize)
+			{
+				OnDiagnosticMessage("Information", "Read size adjusted from {0} to {1} bytes to match sector size", 
+					requestedSize, sectorSize);
+				return sectorSize;
+			}
+			
+			// If requested size is not a multiple of sector size, round up
+			if (requestedSize % sectorSize != 0)
+			{
+				UInt64 alignedSize = ((requestedSize / sectorSize) + 1) * sectorSize;
+				OnDiagnosticMessage("Information", "Read size adjusted from {0} to {1} bytes to align to sector boundary", 
+					requestedSize, alignedSize);
+				return alignedSize;
+			}
+			
+			return requestedSize;
+		}
+
 		#endregion
 
 		#region File Reading Wrappers
@@ -869,7 +901,15 @@ namespace System.IO.Filesystem.Ntfs
 				(dataStream.Fragments[fragmentIndex].Lcn - RealVcn) * _diskInfo.BytesPerSector *
 					_diskInfo.SectorsPerCluster + BlockStart * _diskInfo.BytesPerMftRecord;
 
-			ReadFile(buffer, (BlockEnd - BlockStart) * _diskInfo.BytesPerMftRecord, position);
+			// Calculate the actual read size - must be a multiple of sector size for 4K drives
+			UInt64 requestedReadSize = (BlockEnd - BlockStart) * _diskInfo.BytesPerMftRecord;
+			UInt64 alignedReadSize = GetAlignedReadSize(requestedReadSize);
+			
+			// Safety check: ensure we don't read more than the buffer can hold
+			if (alignedReadSize > bufferSize)
+				alignedReadSize = bufferSize;
+			
+			ReadFile(buffer, alignedReadSize, position);
 
 			return true;
 		}
@@ -1497,10 +1537,15 @@ namespace System.IO.Filesystem.Ntfs
 
 			fixed (byte* buffer = data)
 			{
+				// Calculate the actual read size - must be a multiple of sector size for 4K drives
+				// Note: mftReadSize is at most MAX_SUPPORTED_SECTOR_SIZE (8KB), which is much less than bufferSize (64KB+)
+				UInt64 mftReadSize = GetAlignedReadSize(_diskInfo.BytesPerMftRecord);
+				
 				//Read the $MFT record from disk into memory, which is always the first record in the MFT. 
-				ReadFile(buffer, _diskInfo.BytesPerMftRecord, _diskInfo.MftStartLcn * _diskInfo.BytesPerSector * _diskInfo.SectorsPerCluster);
+				ReadFile(buffer, mftReadSize, _diskInfo.MftStartLcn * _diskInfo.BytesPerSector * _diskInfo.SectorsPerCluster);
 
 				//Fixup the raw data from disk. This will also test if it's a valid $MFT record.
+				// Note: We only process the actual MFT record size, not the full read size
 				FixupRawMftdata(buffer, _diskInfo.BytesPerMftRecord);
 
 				List<Stream> mftStreams = new List<Stream>();
