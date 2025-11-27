@@ -1028,57 +1028,81 @@ namespace System.IO.Filesystem.Ntfs
 		/// Used to check/adjust data before we begin to interpret it
 		/// </summary>
 		private unsafe void FixupRawMftdata(byte* buffer, UInt64 len)
-		{
-			FileRecordHeader* ntfsFileRecordHeader = (FileRecordHeader*)buffer;
+{
+    FileRecordHeader* ntfsFileRecordHeader = (FileRecordHeader*)buffer;
 
-			if (ntfsFileRecordHeader->RecordHeader.Type != RecordType.File)
-				return;
+    if (ntfsFileRecordHeader->RecordHeader.Type != RecordType.File)
+        return;
 
-			UInt16* wordBuffer = (UInt16*)buffer;
+    UInt16* wordBuffer = (UInt16*)buffer;
+    UInt16* UpdateSequenceArray = (UInt16*)(buffer + ntfsFileRecordHeader->RecordHeader.UsaOffset);
 
-			UInt16* UpdateSequenceArray = (UInt16*)(buffer + ntfsFileRecordHeader->RecordHeader.UsaOffset);
-			UInt32 increment = (UInt32)_diskInfo.BytesPerSector / sizeof(UInt16);
+    // CRITICAL FIX: The increment is based on the LOGICAL sector size used when formatting the MFT record,
+    // NOT the physical sector size of the drive.  For MFT records, this is derived from the UsaCount. 
+    // UsaCount = 1 (sequence number) + number of 512-byte sectors in the MFT record
+    // So a 1024-byte MFT has UsaCount=3: 1 + (1024/512) = 1 + 2 = 3
 
-			UInt32 Index = increment - 1;
+    // Calculate the logical sector size used in this MFT record
+    UInt32 logicalSectorSize;
+    if (ntfsFileRecordHeader->RecordHeader.UsaCount > 1)
+    {
+        // UsaCount - 1 = number of sectors, so sector size = MFT record size / (UsaCount - 1)
+        logicalSectorSize = (UInt32)(_diskInfo.BytesPerMftRecord / (UInt32)(ntfsFileRecordHeader->RecordHeader.UsaCount - 1));
+    }
+    else
+    {
+        // Fallback to physical sector size if UsaCount is invalid
+        logicalSectorSize = _diskInfo.BytesPerSector;
+    }
 
-			// Only log if verbose diagnostics enabled
-			if (EnableVerboseDiagnostics)
-			{
-				OnDiagnosticMessage("Debug", "FixupRawMftdata - len={0}, UsaCount={1}, BytesPerSector={2}, increment={3}", 
-					len, ntfsFileRecordHeader->RecordHeader.UsaCount, _diskInfo.BytesPerSector, increment);
-			}
+    UInt32 increment = logicalSectorSize / sizeof(UInt16);
+    UInt32 Index = increment - 1;
 
-			for (int i = 1; i < ntfsFileRecordHeader->RecordHeader.UsaCount; i++)
-			{
-				/* Check if we are inside the buffer. */
-				if (Index * sizeof(UInt16) >= len)
-				{
-					// ALWAYS log errors regardless of verbose flag
-					OnDiagnosticMessage("Error", "USA fixup index out of bounds - Index={0}, len={1}, i={2}, UsaCount={3}", 
-						Index, len, i, ntfsFileRecordHeader->RecordHeader.UsaCount);
-					throw new Exception("USA data indicates that data is missing, the MFT may be corrupt.");
-				}
+    // Only log if verbose diagnostics enabled
+    if (EnableVerboseDiagnostics)
+    {
+        OnDiagnosticMessage("Debug", "FixupRawMftdata - len={0}, UsaCount={1}, BytesPerSector={2}, logicalSectorSize={3}, increment={4}",
+            len, ntfsFileRecordHeader->RecordHeader.UsaCount, _diskInfo.BytesPerSector, logicalSectorSize, increment);
+    }
 
-				// Check if the last 2 bytes of the sector contain the Update Sequence Number.
-				if (wordBuffer[Index] != UpdateSequenceArray[0])
-				{
-					// ALWAYS log errors regardless of verbose flag
-					OnDiagnosticMessage("Error", "USA fixup mismatch at Index={0} - expected={1}, actual={2}", 
-						Index, UpdateSequenceArray[0], wordBuffer[Index]);
-					throw new Exception("USA fixup word is not equal to the Update Sequence Number, the MFT may be corrupt.");
-				}
+    // Calculate how many sectors actually fit in the buffer we have
+    UInt32 sectorsInBuffer = (UInt32)(len / logicalSectorSize);
+    if (len % logicalSectorSize != 0)
+        sectorsInBuffer++;
 
-				/* Replace the last 2 bytes in the sector with the value from the Usa array. */
-				wordBuffer[Index] = UpdateSequenceArray[i];
-				Index = Index + increment;
-			}
-			
-			// Only log success if verbose diagnostics enabled
-			if (EnableVerboseDiagnostics)
-			{
-				OnDiagnosticMessage("Debug", "FixupRawMftdata completed successfully");
-			}
-		}
+    UInt32 actualFixupsNeeded = Math.Min((UInt32)(ntfsFileRecordHeader->RecordHeader.UsaCount - 1), sectorsInBuffer);
+
+    if (EnableVerboseDiagnostics)
+    {
+        OnDiagnosticMessage("Debug", "FixupRawMftdata - sectorsInBuffer={0}, actualFixupsNeeded={1}",
+            sectorsInBuffer, actualFixupsNeeded);
+    }
+
+    for (int i = 1; i <= actualFixupsNeeded; i++)
+    {
+        if (Index * sizeof(UInt16) >= len)
+        {
+            OnDiagnosticMessage("Error", "USA fixup index out of bounds - Index={0}, len={1}, i={2}, UsaCount={3}, actualFixupsNeeded={4}",
+                Index, len, i, ntfsFileRecordHeader->RecordHeader.UsaCount, actualFixupsNeeded);
+            throw new Exception("USA data indicates that data is missing, the MFT may be corrupt.");
+        }
+
+        if (wordBuffer[Index] != UpdateSequenceArray[0])
+        {
+            OnDiagnosticMessage("Error", "USA fixup mismatch at Index={0} - expected={1}, actual={2}",
+                Index, UpdateSequenceArray[0], wordBuffer[Index]);
+            throw new Exception("USA fixup word is not equal to the Update Sequence Number, the MFT may be corrupt.");
+        }
+
+        wordBuffer[Index] = UpdateSequenceArray[i];
+        Index = Index + increment;
+    }
+
+    if (EnableVerboseDiagnostics)
+    {
+        OnDiagnosticMessage("Debug", "FixupRawMftdata completed successfully");
+    }
+}
 
 		/// <summary>
 		/// Decode the RunLength value.
@@ -1601,7 +1625,7 @@ namespace System.IO.Filesystem.Ntfs
 
 				//Fixup the raw data from disk. This will also test if it's a valid $MFT record.
 				// Note: We only process the actual MFT record size, not the full read size
-				FixupRawMftdata(buffer, _diskInfo.BytesPerMftRecord);
+				FixupRawMftdata(buffer, mftReadSize);
 
 				List<Stream> mftStreams = new List<Stream>();
 
